@@ -945,7 +945,7 @@ u8 data_recv(void)
 
 void BD_Timer_out(void *  parameter)
 {
-	//u3_send_len("@",1);
+
 
   	 Check_bd_data();
 	if(BD_TX.flag_send!=RT_EOK)
@@ -1405,7 +1405,6 @@ u8  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 	else
 	{
 		OutPrint_HEX("write_BD1:", bd_send, len+2);
-		u3_send_len("test",4);
 		u3_send_len(bd_send,len+2);
 	}
 	return RT_EOK;
