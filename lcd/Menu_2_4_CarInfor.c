@@ -20,7 +20,14 @@ void Display_driver(u8 drivercar)
     u8 color_disp[4];
 	u8 disp_spd=0,i=0;
 	u16 speed_pulse=0;
-	
+if(drivercar>3)
+{
+	drivercar =3;	
+}
+if(drivercar<1)
+{
+	drivercar =1;
+}
 switch(drivercar)
 	{
 	case 1:

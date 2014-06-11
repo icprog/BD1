@@ -19,6 +19,9 @@
 
 
 //#define                                      HMI_MsgQueStack_SIZE  512
+ //+++++++++++++++++++++++++++++++++++++++wxgBD1+++++++++++++
+ static u8 bd1_data[512];
+ struct rt_messagequeue mq_bd1;
 
  struct rt_mailbox mb_hmi;
  char   mb_hmi_pool[128];
@@ -370,7 +373,11 @@ static void HMI_thread_entry(void* parameter)
 
 	while (1)
 	{
-	       //KeyCheckFun();  
+		data_recv();
+		
+		BD1_RxProcess();
+
+	       KeyCheckFun();  
            pMenuItem->timetick( 10 ); 
 	 	   pMenuItem->keypress( 10 );  
 		   //-------  
@@ -428,7 +435,7 @@ static void HMI_thread_entry(void* parameter)
 		       pMenuItem->show();
 		}
 	 	//--------------------------------------------	   
-        rt_thread_delay(25);                 
+        rt_thread_delay(10);                 
      }  
 }
 
@@ -439,6 +446,8 @@ void HMI_app_init(void)
 {
         rt_err_t result;
 		
+	//++++++++++++++++++++++++++++++++wxg_bd1++++++++++++++++++++++++++++++++++
+	rt_mq_init( &mq_bd1, "mq_bd1", &bd1_data[0], 128 - sizeof( void* ), sizeof(bd1_data), RT_IPC_FLAG_FIFO);
 
 	result=rt_thread_init(&HMI_thread, "HMI", 
 		HMI_thread_entry, RT_NULL,

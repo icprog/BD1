@@ -183,6 +183,7 @@ void  Lcd_init(void)
 
 void  Lcd_Data_Process(void) 
 {
+#if 0
 	u16 data_id =0,i=0; 
 	u16 ContentLen=0;
 	u8  dwin_reg[150];
@@ -400,7 +401,7 @@ else
 {
 	return ;
 }
-
+#endif
 }
 
 

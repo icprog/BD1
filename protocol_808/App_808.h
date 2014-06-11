@@ -41,6 +41,7 @@ extern   int  udisk_fd;
 extern 	rt_thread_t app_tid; // app Ïß³Ì pid
 
 
+
 extern void SIMID_Convert_SIMCODE( void ); 
 extern void    Protocol_app_init(void);
 extern void  SensorPlus_caculateSpeed (void);

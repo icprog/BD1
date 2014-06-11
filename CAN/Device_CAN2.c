@@ -15,13 +15,19 @@
 #include "Device_CAN.h"
 #include <finsh.h>
 #include "Device_CAN2.h"
+#include  "rtdevice.h "
+
 
 #define  Beam_power_numb 1
 #define  Version_Info    10   
 
+
+#define  bd_ic_ok        2
+#define  bd_terminal_ok  1
+#define  bobao_ing			3
 u8   U3_Rx[300];
 
-u8   U3_content[300];
+u8   U3_content[600];
 u16   U3_content_len=0; 
 u8   U3_flag=0;
 u16   U3_rxCounter=0;
@@ -29,6 +35,7 @@ u8    Version[Version_Info];
 BD_ONE	BD1_struct; //  北斗1  相关
 
 u8	U3_Tx[260];
+u8  you_can_deial =0;
 BD_COMMAND BD1_control;
 ELEVA_PRESS Aerial_air;
 	
@@ -41,16 +48,64 @@ BD_SELF_CHECK BD_ZJ;//自检
 BD_SELF_CHECK BD_TX;//通信
 BD_SELF_CHECK BD_FRE;//入站频率
 BD_SELF_CHECK BD_FK;//反馈
-rt_timer_t BD_Timer; 
+static rt_timer_t BD_Timer; 
 extern int number_txt;
 extern char *trans[];
 extern char *number[];
+//+++++++++++++++++++++++接收机制用一个ringbuffer++++++++++++
+
+#define BD_DATA_SIZE 128
+static unsigned char	bd_data[BD_DATA_SIZE];
+
+static struct rt_ringbuffer bd1_pool;
+
 
 u8 dwlcd =0;//0为小屏发送 1为大屏发送
+u8 tts_play_flag =0;//0表示空闲状态 3表示要播报内容
 //分屏显示相关
  u8 index_addre[12]={0};
  u8 index_len[12]={0};
 #define  Max_value     0xffffffff 
+
+/******************************************************************************
+ * bo_bao() 
+ * DESCRIPTION: 防止播报和拨号的冲突  
+ * Input: 
+ * Output: 
+ * Returns: 
+ * 
+ * modification history
+ * --------------------
+ *  05 6 2014, wxg written
+ * --------------------
+ ******************************************************************************/
+u8 bo_bao(u8 input)
+{
+	if(input!=bobao_ing)
+	{
+		switch(input)
+		{
+			case 1:
+				tts_play_flag = bobao_ing;
+				rt_kprintf("input2 %d\n",tts_play_flag);
+				TTS_play("北斗终端正常");
+				
+			break;
+			case 2:
+				tts_play_flag = bobao_ing;;
+				rt_kprintf("input1 %d\n",tts_play_flag);
+				TTS_play("北斗用户卡正常");
+				
+			break;
+			default:
+				break;
+		}
+	}
+	return tts_play_flag;
+}
+
+
+
 
 /******************************************************************************
  * Function: index_txt () 
@@ -67,11 +122,11 @@ u8 dwlcd =0;//0为小屏发送 1为大屏发送
 void index_txt(u8*str,u8 length)
 {
 #if 1
-	u8 counter =0;
+	u8 counter =0;//记录查询了多少个字符
 	u8 mark =0;//标记地址
-	u8 flag=0;//标记长度
+	u8 flag=0;//标记个数
 	u8 i=0;
-	u8 number=0;
+	u8 number=0;//记录查询字符里面有多少个ascii
 	memset(index_addre,0,12);
 	memset(index_len,0,12);
 	//OutPrint_HEX("input_data:",str, length);
@@ -84,21 +139,17 @@ void index_txt(u8*str,u8 length)
 	    
 		for(i=0;i<length;i++)
 		{
-		    /*
-			if((str[i]<=9)&&(str[i]>=0))
-			{
-				str[i]=str[i]+'0';
-			}
-			*/
+		    
 			if(str[i]<0x7e)
 			{
 				number=number+1;
 				rt_kprintf("ascii---%x--%d\r\n",str[i],i);
 			}
 			counter=counter+1;
+			//汉字和字符到了20个以后的处理
 			if(counter%20==0)
 			{
-				
+				//判断字符是否是偶数个只会比20小的偶数
 				if(number%2==0)
 				{
 					index_addre[mark++] = i;
@@ -106,6 +157,7 @@ void index_txt(u8*str,u8 length)
 					//rt_kprintf("index[mark]---%d--%d\r\n",index_addre[mark-1],index_len[flag-1]);
 
 				}
+				//如果里面不是偶数个则只可以显示19个
 				else
 				{
 					index_addre[mark++] =i-1;
@@ -113,13 +165,15 @@ void index_txt(u8*str,u8 length)
 					//rt_kprintf("hunfa:index[mark]---%d--%d\r\n",index_addre[mark-1],index_len[flag-1]);
 				}
 				counter =0;
+				number =0;
 			}
 		}
-
+		
 		if( length%20!=0)
 		{
 			index_len[flag]=(length%20);
 		}
+		
 	}
 	number =0;
 	counter =0;
@@ -158,15 +212,17 @@ u32  find_max_id(u16 addre)
 			{
 				tran_id = tmp_id;
 			}
+			/*
 			else
 			{
 				tran_id = 0;
 			}
+			*/
 		}
 		
 		//tran_id =tran_id +1;
 	}
-	rt_kprintf("the max ID --%d\r\n",tran_id);
+	rt_kprintf("the max ID --%d\r\n",tran_id+1);
 	return tran_id ;
 	#endif
 }
@@ -177,7 +233,7 @@ u32  find_max_id(u16 addre)
  * Function: Sort_ID () 
  * DESCRIPTION: - 可以搜索当前存储区域的任意的ID和地址 
  * Input: addre存储起始地址 offset返回偏移量
- * Input: rank:查询ID的排名倒序
+ * Input: rank:查询ID的地址
  * Output: 
  * Returns: 
  * 
@@ -194,21 +250,29 @@ u16 Sort_ID(u16 addre,u16 offset,u8 rank)
 	u32 tmp_addre =0;
 	memset(temp,0,4);
 	max_addre = find_max_id(DF_BD_data_rx);
+	#if 1
 	if(max_addre==0)
 	{
 		return RT_ERROR;	
 	}
+	if(max_addre>16)
+	{
+		rank =max_addre-(16 -rank); 
+	}
+	#endif
+	
 	for(i=0;i<16*512;i=i+256)
 	{
 		DF_ReadFlash(addre,i,temp,4);
 		tmp_addre= (temp[0]<<24)+(temp[1]<<16)+(temp[2]<<8)+temp[3];
-		if(tmp_addre==(max_addre-rank))
+		if(tmp_addre==rank)
 		{
 			offset =i;
-			//rt_kprintf("the offset is ---%d\r\n",offset);
+			
 			return offset;
 		}
 	}
+	rt_kprintf("debug:the offset is %d--%d\r\n",offset,rank);
 	return RT_ERROR;
 	#endif
 }
@@ -230,12 +294,11 @@ void  First_show(u8* str2 ,u8 Screen,u8 mode)
 #if 1
     u32   addre=0;
 	u8  show_buf[20];
-	//Dis_date[22]={"2000/00/00  00:00:00"};
 	char T_date[22]={"00/00/00 00:00:00"};
 	u8 i=0;
 	memset(show_buf,0,20);
 	lcd_fill(0);
-	lcd_text12(0,5,number[Screen],strlen(number[Screen]),mode);
+	lcd_text12(0,5,number[Screen-1],strlen(number[Screen-1]),mode);
 	for(i=0;i<3;i++)
 		T_date[i*3]=str2[i+5]/10+'0';
 	for(i=0;i<3;i++)
@@ -245,7 +308,7 @@ void  First_show(u8* str2 ,u8 Screen,u8 mode)
 		T_date[9+i*3]=str2[i+5+3]/10+'0';
 	for(i=0;i<3;i++)
 		T_date[10+i*3]=str2[i+5+3]%10+'0';
-	lcd_text12(strlen(number[Screen])*6,5,T_date,17,mode);
+	lcd_text12(strlen(number[Screen-1])*6,5,T_date,17,mode);
 	//rt_kprintf("mian_screen --%d---%d\r\n",strlen(number[Screen]),Screen);
 	lcd_text12(0,19,"发信地址:",8,mode);
 	OutPrint_HEX("addre", str2+12, 3);
@@ -412,7 +475,9 @@ show_text(u8 n_screen,u8 n_sub_screen)
 	memset(temp,0,10);
 	memset(data,0,256);
 	memset(str,0,210);//纯信息内容
+	
 	Addre_offset =Sort_ID(DF_BD_data_rx, Addre_offset,input);
+	rt_kprintf("Addre_offset--%d\r\n",Addre_offset);
     if(Addre_offset==RT_ERROR)
     {
 		lcd_fill(0);
@@ -421,25 +486,34 @@ show_text(u8 n_screen,u8 n_sub_screen)
 		return RT_ERROR;
     }
 	
-	rt_kprintf("Addre_offset--%d\r\n",Addre_offset);
+	//首先读出个数和长度的数据
 	DF_ReadFlash(DF_BD_data_rx,Addre_offset,temp,5);
+	//根据长度再读出真实的数据
 	DF_ReadFlash(DF_BD_data_rx,Addre_offset,data,temp[4]);
-	
-	data_len = ((data[17]<<8) +data[18])/8;//接收的存储长度除以8
-	//rt_kprintf("du chu shu ju len-- %d\r\n",temp[4]);
-	//OutPrint_HEX("Read", data,temp[4]);
+	//这是自己定义的格式17，和18存储着接收电文的长度信息//接收的存储长度除以8
+	data_len = ((data[17]<<8) +data[18])/8;
+	rt_kprintf("du chu shu ju len-- %d\r\n",temp[4]);
+	OutPrint_HEX("Read", data,temp[4]);
 	//length =data_len;
 	//data_len=data_len/8;
 	if(data[11]==0x60)//如果是混发的话
 	{
-		memcpy(str,data+20,data_len);
+		
+		memcpy(str,data+20,data_len-1);
 		index_txt(str,data_len-1);
 		OutPrint_HEX("Read DATA ", str,data_len);
+		OutPrint_HEX("index_addre",index_addre,12);
+		OutPrint_HEX("index_len",index_len,12);
 	}
 	else
 	{
+		//数组拷贝到这个str数组
 		memcpy(str,data+19,data_len);
+		
 		index_txt(str,data_len);
+		OutPrint_HEX("Read DATA1 ", str,data_len);
+		OutPrint_HEX("index_addre",index_addre,12);
+		OutPrint_HEX("index_len",index_len,12);
 	}
 	
 	//从电文长度中
@@ -460,7 +534,7 @@ show_text(u8 n_screen,u8 n_sub_screen)
 * -------------------------------
  ******************************************************************************/
 #if 1
-u8 Rx_data_save(u8 *str)
+u8 Rx_data_save(u8 *str,u8 length)
 {
 	u8 temp[4];
 	u8 trans[256];
@@ -469,40 +543,33 @@ u8 Rx_data_save(u8 *str)
 	u32 test_head=0;
 	memset(trans,0,256);
 	memset(temp,0,4);
-	
+	//OutPrint_HEX("str_test",str,length);
 	for(i=0;i<16*512;i=i+256)
 	{
-	    if(i>=8*512)
-	    {
-	    	//下半部分显示时候显示上半部分
-	    	SST25V_SectorErase_4KByte((8*(((u32)DF_BD_data_rx+8)/8))*PageSIZE);
-			//Erase_flag =Top_15;
-	    }
-		if(i>=16*512)//保证随时都有可以写的空间
-		{
-		    i=0;//从新遍历
-			//擦除上半部分显示下半部分
-			SST25V_SectorErase_4KByte((8*((u32)DF_BD_data_rx/8))*PageSIZE);	
-			//Erase_flag = After_15;
-			rt_kprintf("erase the 8016-8023\r\n");
-		}
+	    
 		DF_ReadFlash(DF_BD_data_rx,i,temp,4);
 		
 		test_head = (temp[0]<<24)+(temp[1]<<16)+(temp[2]<<8)+temp[3];
 		//rt_kprintf(" %d--%d--%d--%d--%d--%x\r\n",temp[0],temp[1],temp[2],temp[3],i,test_head);
 		if(test_head==Max_value)
 		{
-	
-			test_head = find_max_id(DF_BD_data_rx)+1;//最大ID自加1
+			
+			rt_kprintf("watch i %d\n",i/256);
+			test_head = find_max_id(DF_BD_data_rx)+1;//最大ID自加1+1;//最大ID自加1	
+			
+			
 		    //找出上一个ID值
 	    	trans[0]=test_head>>24;
 			trans[1]=(test_head>>16)&0xff;
 			trans[2]=(test_head>>8)&0xff;
 			trans[3]=test_head&0xff;
-			len =(((str[16]<<8)+str[17])/8);
-			//rt_kprintf("收到电文长度---%d",len);
-			len =len+8;//根据协议加上7个字节(信息类别到电文长度)
-		    trans[4] =len+4+6+1;//+4是加上计数+1长度+是时间长度=总长
+			//收到的电文的长度
+			//len =(((str[16]<<8)+str[17])/8);
+			rt_kprintf("收到电文长度---%d",length);
+			//根据协议加上7个字节(信息类别到电文内容结束的长度)
+			len =length+8;
+			//+4是加上计数+1长度+是时间长度=总长
+		    trans[4] =len+4+6+1;
 
 			if(UDP_dataPacket_flag==0x02)
 			{
@@ -540,13 +607,32 @@ u8 Rx_data_save(u8 *str)
 		    rt_kprintf("-------接收数据有误-----\r\n");
 			return RT_ERROR;
 		    }
-			memcpy(trans+11,str+10,len);//将信息内容拷贝
+			memcpy(trans+11,str+10,trans[4]);//将信息内容拷贝
+			//+++++++++++++++++++++++++++++++++++++++++++++
+			if(i==15*256)
+		    {
+				rt_kprintf("擦出后半部分\n");
+		    	//保留上保留前八个擦出后面八个
+		    	SST25V_SectorErase_4KByte((8*(((u32)DF_BD_data_rx+8)/8))*PageSIZE);
+				
+		    }
 			
+			//++++++++++++++++++++++++++++++++++++++++++++
 			DF_WriteFlashDirect(DF_BD_data_rx,i,trans,trans[4]);
-			//OutPrint_HEX("saved", trans, trans[4]);//wxg_test
+			OutPrint_HEX("saved", trans, trans[4]);//wxg_test
 			memset(temp,0,4);//清零
 			return RT_EOK;
 		}
+		
+	if(i==31*256)//保证随时都有可以写的空间
+	{
+		rt_kprintf("擦出前半部分\n");
+	    
+		//擦除上半部分
+		SST25V_SectorErase_4KByte((8*((u32)DF_BD_data_rx/8))*PageSIZE);	
+		
+		rt_kprintf("erase the 8016-8023\r\n");
+	}
 			
 	}
 	return RT_EOK;
@@ -571,8 +657,8 @@ u8  show_screen(u8 *str ,u8 input,u16 length)
   #if 1
     u8 max_n=0;
   
-	max_n =(length/40);
-	if(max_n<=1)
+	max_n =(length/40)+1;
+	if(max_n>1)
 	{
 		if(length%40>0)
 		{
@@ -651,7 +737,9 @@ u16 Info_to_fill(void )
 		u16  info_len =0;
 		u32  Dis_01km=0;
 		//------------------------------- Stuff --定位的情况下--------------------------------------
-
+		//memcpy( ( char * ) U3_Tx+ U3_Tx_Wr, "#TCB",4 );
+		//U3_Tx_Wr += 4;
+		
 		memcpy( ( char * ) U3_Tx+ U3_Tx_Wr, ( char * )Warn_Status,4 );    
 		U3_Tx_Wr += 4;
 
@@ -696,38 +784,6 @@ u16 Info_to_fill(void )
 		U3_Tx[U3_Tx_Wr++]=(Dis_01km>>8); 
 		U3_Tx[U3_Tx_Wr++]=Dis_01km; 
 
-
-
-		if(Warn_Status[1]&0x10)
-		{
-
-		U3_Tx[U3_Tx_Wr++]=0x12; 
-
-		U3_Tx[U3_Tx_Wr++]=6;
-
-		U3_Tx[U3_Tx_Wr++]=InOut_Object.TYPE;
-		U3_Tx[U3_Tx_Wr++]=(InOut_Object.ID>>24);
-		U3_Tx[U3_Tx_Wr++]=(InOut_Object.ID>>16);
-		U3_Tx[U3_Tx_Wr++]=(InOut_Object.ID>>8);
-		U3_Tx[U3_Tx_Wr++]=InOut_Object.ID;
-		U3_Tx[U3_Tx_Wr++]=InOut_Object.InOutState;  
-		rt_kprintf("\r\n ----- 0x0200 current 附加信息 \r\n");    
-		}
-
-
-		if(Warn_Status[3]&0x02)
-		{      
-
-		U3_Tx[U3_Tx_Wr++]=0x11;
-
-		U3_Tx[U3_Tx_Wr++]=1; 
-
-		U3_Tx[U3_Tx_Wr++]=0; 
-
-		}
-
-		rt_kprintf("\r\n ----- 0x0200 current 附加信息 \r\n"); 
-
 		U3_Tx[U3_Tx_Wr++]=0x25; 
 
 		U3_Tx[U3_Tx_Wr++]=4; 
@@ -739,7 +795,7 @@ u16 Info_to_fill(void )
 		U3_Tx[U3_Tx_Wr++]=0x00;
 		U3_Tx[U3_Tx_Wr++]=BD_EXT.Extent_IO_status; 
 
-
+#if 0
 		U3_Tx[U3_Tx_Wr++]=0xFE; 
 
 		U3_Tx[U3_Tx_Wr++]=2; 
@@ -759,6 +815,8 @@ u16 Info_to_fill(void )
 		U3_Tx[U3_Tx_Wr++]=(BD_EXT.AD_1>>8);  
 		U3_Tx[U3_Tx_Wr++]=BD_EXT.AD_1;
 		info_len = U3_Tx_Wr-1;
+#endif	
+		info_len = U3_Tx_Wr;
 		return info_len;
 		
 }
@@ -786,37 +844,95 @@ void Check_bd_data(void)
  	BD_ZJ.Time_consum++;
 	if((BD_ZJ.Time_consum%2)==0)//每两秒发送一次
  	BD1_Tx(BD1_TYPE_XTZJ,0,2);
-	
+	#if 0
 	if(BD_ZJ.Time_consum>10)//连续发送五次
 	{
 		BD_ZJ.result=result_failed;
 		BD_ZJ.status=result_failed;
 		BD_ZJ.Time_consum =0;
-		//TTS_play("北斗用户机无法连接");
+		TTS_play("北斗用户机无法连接");
 	}
+	#endif
  }
- if(((GSM_PWR.result == result_success)&&(BD_ZJ.result==result_success)&&(BD_IC.result==result_pending))||(BD_IC.status==result_Artificial))
+ if(0==tts_play_flag)
  {
- 	
-	BD_IC.Time_consum++;
-	if((BD_IC.Time_consum%2)==0)//每两秒发送一次
-	BD1_Tx(BD1_TYPE_ICJC, 0, 1);
-	if(BD_IC.Time_consum>10)
-	{
-	    BD_IC.status=result_failed;
-		BD_IC.result = result_failed;
-		BD_IC.Time_consum =0;
-		TTS_play("北斗用户卡检测失败");
-	}
-	
-	
+	 if(((GSM_PWR.result == result_success)&&(BD_ZJ.result==result_success)&&(BD_IC.result==result_pending))||(BD_IC.status==result_Artificial))
+	 {
+
+		
+		
+			BD_IC.Time_consum++;
+		
+		if((BD_IC.Time_consum%2)==0)//每两秒发送一次
+		BD1_Tx(BD1_TYPE_ICJC, 0, 1);
+		#if 0
+		if(BD_IC.Time_consum>10)
+		{
+		    BD_IC.status=result_failed;
+			BD_IC.result = result_failed;
+			BD_IC.Time_consum =0;
+			TTS_play("北斗用户卡检测失败");
+		}
+		#endif
+		
+		
+	 }
  }
  #endif
 	
 }
 /******************************************************************************
+ * data_recv() 
+ * DESCRIPTION: 消息队列接收的函数  
+ * Input: 
+ * Output: 
+ * Returns: 
+ * 
+ * modification history
+ * --------------------
+ *  05 6 2014, wxg written
+ * --------------------
+ ******************************************************************************/
+u8 data_recv(void)
+{
+	rt_err_t result;
+	if((BD_IC.result==result_success)&&(BD1_struct.in_freq!=0))
+	{
+		if(BD_TX.flag_send==RT_EOK)
+		{
+			
+				
+			memset(U3_Tx,0,sizeof(U3_Tx));
+			result=rt_mq_recv(&mq_bd1,&U3_Tx[0],sizeof(U3_Tx),RT_WAITING_NO);
+			rt_kprintf("接收结果 %d\n",result);
+			if(result==RT_EOK)
+			{
+				u3_send_len(U3_Tx,BD_TX.length);
+				OutPrint_HEX("write_BD1:", U3_Tx, BD_TX.length);
+				BD_TX.flag_send =RT_EBUSY;
+				//每次发送完成则要将长度清零,将入站计数从新开始计数,模式为自动发送
+				BD_TX.length=0;
+				BD_FRE.llcd_time_wait =0;
+				BD_TX.status=bd1_send_auto;
+			}
+			else
+			{
+				if(BD_TX.status==bd1_send_auto)
+				{
+					memset(U3_Tx,0,sizeof(U3_Tx));
+					//默认的情况下发送0200信息到运营平台
+					BD1_Tx(BD1_TYPE_TXSQ,U3_Tx,Info_to_fill());	
+				}
+			}
+		}
+		
+	}
+	
+}
+
+/******************************************************************************
  * Function:  () 
- * DESCRIPTION: - 超时处理函数做一个入站频度间隔的处理 
+ * DESCRIPTION: - 超时处理函数做一个入站频度间隔的处理基准时间为1s 
  * Input: 
  * Input: 
  * Output: 
@@ -829,16 +945,84 @@ void Check_bd_data(void)
 
 void BD_Timer_out(void *  parameter)
 {
-#if 1
-    Check_bd_data();
+	//u3_send_len("@",1);
+
+  	 Check_bd_data();
+	if(BD_TX.flag_send!=RT_EOK)
+		{
+			BD_FRE.llcd_time_wait++;
+			if(BD_FRE.llcd_time_wait==(BD1_struct.in_freq+1))
+			{
+				BD_FRE.llcd_time_wait=0;
+				
+				
+				BD_TX.flag_send=RT_EOK;
+			}
+		}
+#if 0	
+	if((GSM_PWR.result == result_success)&&(get_fist==0))
+	{
+		bd1_link_time++;
+		if(bd1_link_time>60)
+		{
+			you_can_deial =1;
+			get_fist =1;
+			bd1_link_time =0;
+		}
+	}
+#endif	
+#if 0	
 	//rt_kprintf("test----%d--%d\r\n",BD1_struct.in_freq,BD_FRE.Frequency);
-    if((BD_IC.result==result_success)||(BD1_struct.in_freq!=0))
+	if((BD_IC.result==result_success)&&(BD1_struct.in_freq!=0))
+	{
+		if(BD_TX.flag_send==RT_EOK)
+		{
+			
+				
+			memset(U3_Tx,0,sizeof(U3_Tx));
+			result=rt_mq_recv(&mq_bd1,&U3_Tx[0],sizeof(U3_Tx),RT_WAITING_NO);
+			rt_kprintf("接收结果 %d\n",result);
+			if(result==RT_EOK)
+			{
+				u3_send_len(U3_Tx,BD_TX.length);
+				OutPrint_HEX("write_BD1:", U3_Tx, BD_TX.length);
+				BD_TX.flag_send =RT_EBUSY;
+				//每次发送完成则要将长度清零,将入站计数从新开始计数,模式为自动发送
+				BD_TX.length=0;
+				BD_FRE.llcd_time_wait =0;
+				BD_TX.status=bd1_send_auto;
+			}
+			else
+			{
+				if(BD_TX.status==bd1_send_auto)
+				{
+					memset(U3_Tx,0,sizeof(U3_Tx));
+					//默认的情况下发送0200信息到运营平台
+					BD1_Tx(BD1_TYPE_TXSQ,U3_Tx,Info_to_fill());	
+				}
+			}
+		}
+		else
+		{
+			BD_FRE.llcd_time_wait++;
+			if(BD_FRE.llcd_time_wait==(BD1_struct.in_freq+1))
+			{
+				BD_FRE.llcd_time_wait=0;
+				
+				
+				BD_TX.flag_send=RT_EOK;
+			}
+		}
+	}
+#endif	
+#if 0	
+    if((BD_IC.result==result_success)&&(BD1_struct.in_freq!=0))
     {
-		BD_FRE.Frequency++;
+		BD_FRE.llcd_time_wait++;
 		//rt_kprintf("BD_FK.result=%d\r\n",BD_FK.result);
 		if(BD_FK.result==result_pending)
 		{
-			if(BD_FRE.Frequency==(BD1_struct.in_freq-3))
+			if(BD_FRE.llcd_time_wait==(BD1_struct.in_freq-3))
 			{
 				TTS_play("北斗回复超时，请重试");
 				BD_FK.result=result_failed;
@@ -848,16 +1032,19 @@ void BD_Timer_out(void *  parameter)
 			}
 			
 		}
-		if(BD_FRE.Frequency ==(BD1_struct.in_freq+1))
+		if(BD_FRE.llcd_time_wait==(BD1_struct.in_freq+1))
 		{
-			
-			
-		   if(ModuleStatus&Status_GPS )//如果定位就发送0200信息
+			//现在可以发送了等待发送
+			BD_TX.flag_send=RT_EOK;
+			//进入从新计数模式
+			BD_FRE.llcd_time_wait=0;
+		  // if(ModuleStatus&Status_GPS )//如果定位就发送0200信息
 		   	{
 				
-				//是用什么格式上发定位信息
+				
 				memset(U3_Tx,0,sizeof(U3_Tx));
-				if(BD_TX.status == bd1_send_auto)//自动发送
+				//自动发送状态下发送默认信息
+				if(BD_TX.status == bd1_send_auto)
 				{
 					BD1_Tx(BD1_TYPE_TXSQ,U3_Tx,Info_to_fill());	
 					BD_TX.flag_send=RT_EBUSY;
@@ -873,30 +1060,27 @@ void BD_Timer_out(void *  parameter)
 				{
 					BD1_Tx(BD1_TYPE_TXSQ,trans[number_txt],strlen(trans[number_txt]));//车台内置内容
 				}
-				else
-				{
-					BD1_Tx(BD1_TYPE_TXSQ,Big_lcd.TXT_content,strlen(Big_lcd.TXT_content));//lcd发送内容
-					Lcd_write(Big_lcd.status, LCD_PAGE, 1);
-					BD_FRE.Frequency =0;//从新计数
-				}
-					
-					BD_TX.Time_consum =1;//控制小屏幕切换时间得计时
-					BD_TX.flag_send=RT_EBUSY;//在发送间隔中处于忙状态
-					BD_TX.Frequency=0;//可以让其回到待机界面
+				
+					//控制小屏幕切换时间得计时
+					BD_TX.Time_consum =1;
+					//在发送间隔中处于忙状态
+					BD_TX.flag_send=RT_EBUSY;
+					//可以让其回到待机界面
+					BD_TX.llcd_time_wait=0;
 					lcd_fill(0);
 					lcd_text12(10,10,"通信申请已经发送",16,LCD_MODE_SET);
 					lcd_update_all();
 				
 			}
-			BD_FRE.Frequency =0;
-			BD_TX.flag_send=RT_EOK;
+			
+			
 		}
     }
-	//rt_kprintf("时间消耗---%d\r\n",BD_TX.Time_consum);
+	//小屏幕上显示发送字样的切回
 	if(BD_TX.Time_consum ==1)
 	{
-		BD_TX.Frequency++;
-		if(BD_TX.Frequency==5)
+		BD_TX.llcd_time_wait++;
+		if(BD_TX.llcd_time_wait==5)
 		{
 			pMenuItem=&Menu_1_Idle;
 			BD_TX.Time_consum =0;
@@ -928,8 +1112,8 @@ void BD1_init(void)
 	BD1_control.data_freq_test =0;//自检频度
 	BD1_control.data_outfreq =0;//时间输出频度
 	BD_IC.Time_consum =0;
-	BD_IC.Frequency=0;
-	BD_FRE.Frequency =0;
+	
+	BD_FRE.llcd_time_wait=0;
 	BD_IC.result = result_pending;
 	BD_ZJ.result=result_pending;
 	BD_FRE.status =0;
@@ -938,10 +1122,13 @@ void BD1_init(void)
 	BD1_struct.Rx_enable =RT_EBUSY;
 	BD_FK.Time_consum=0;
 	BD_ZJ.flag_send=0;
+	BD1_struct.in_freq = 20;
+	BD_TX.info_source =0;
 	//mainshow=show_first;
 	memset(BD1_control.data_user_addr,0,3);
 	memset(BD1_struct.UserAddr,0,3);
-	
+	//用于测试测试完成后删除++++++++++++++++++++++++
+
 }
 /******************************************************************************
  * Function: Read_bd1_data () 
@@ -973,8 +1160,9 @@ void Read_bd1_data(void)
 		BD1_control.data_user_addr[0] = data[0];
 		BD1_control.data_user_addr[1] = data[1];
 		BD1_control.data_user_addr[2] = data[2];
-		rt_kprintf("通信地址%d--%d--%d\r\n",data[0],data[1],data[2]);
+		rt_kprintf("通信地址%02x--%02x--%02x\r\n",data[0],data[1],data[2]);
 	}
+	/*
 	if(0xff!=data[3])
 	{
 		BD1_struct.in_freq= (data[3]<<8) +data[4];
@@ -986,20 +1174,23 @@ void Read_bd1_data(void)
 		rt_kprintf("NO Positioning frequency \r\n");
 		BD1_struct.in_freq =0;
 	}
+	*/
 	memset(data,0,sizeof(data));
 	
 }
 
-void u3_send_len(u8 *instr,u16 infolen);
 
 
-void  BD1_Tx(u8 Type,void *str,u8 stuff_len)
+
+u8  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 {
 	u8  bd_send[300]; 
 	u16  d_len,len=0;
 	u8  fcs=0;
 	u8  stuff[260];
 	u16  BD_temp =0;
+	static u8  flag_mq =0;
+	rt_err_t result;
 	memset(bd_send,0,sizeof(bd_send));
 	memset(stuff,0,sizeof(stuff));
 	// stuff 
@@ -1045,7 +1236,8 @@ void  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 							  		stuff[1] = 0;
 									stuff[2] = 0;
 									stuff[3] = 0;
-									stuff[4] = 0;//正式时换算为0.1米
+									stuff[4] = 0;
+									//正式时换算为0.1米
 									stuff[5] = 0;
 									stuff[6] = 0;
 									stuff[7] = 0;
@@ -1101,24 +1293,27 @@ void  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 							{
 								BD1_control.message_mode =0x46;//代码
 							}
-							stuff[0] = 0x46;
+							stuff[0] = 0x46;//默认为混发模式
 							//stuff[0] = BD1_control.message_mode;
 							//通信地址
 							stuff[1] = BD1_control.data_user_addr[0];
 							stuff[2] = BD1_control.data_user_addr[1];
 							stuff[3] = BD1_control.data_user_addr[2];
 							//通信内容
-							stuff_len=stuff_len+1;//长度加上混发的头
+							
+							stuff_len=stuff_len+1;//长度加上混发的头(A4)
+							//rt_kprintf("stuff_len+1  %d\n",stuff_len+1);
 							BD_temp =stuff_len*8;
+							//电文长度
 							stuff[4] = BD_temp >>8;
 							stuff[5] = BD_temp &0xff;
 							//是否应答
 							stuff[6] = BD1_control.data_ask;
 							stuff[7] = 0xA4;
-							memcpy(stuff+8, str, stuff_len-1);//传过来的电文不应该加上A4
+							memcpy(stuff+8, str, stuff_len-1);//传过来的电文真实长度(没有加混发的头)
 							//rt_kprintf("电文长度%d\r\n",stuff_len-1);
-							stuff_len=(stuff_len-1)+8;
-							
+							stuff_len=(stuff_len-1)+8;//电文实际长度加上一个A4+前面7位
+							flag_mq =1;
 						
 							break;
 			   
@@ -1133,7 +1328,7 @@ void  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 				             break;
 
 		case  BD1_TYPE_XTZJ:
-							rt_kprintf("wxg----xtzj\r\n");
+							
 	                         memcpy(bd_send,"$XTZJ",5);
 							 stuff[0] = BD1_control.data_freq_test>>8;
 							 stuff[1] = (BD1_control.data_freq_test)&0xff;
@@ -1152,9 +1347,12 @@ void  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 		//clear 
 		
 		len=10+stuff_len+1;  // 总的数据长度
+		//rt_kprintf("len... %d\n",len);
+		//数据长度
 		bd_send[5]=len>>8;
-		bd_send[6] = len & 0xff;//数据长度
-		bd_send[6+1]=BD1_struct.UserAddr[0];//用户地址怎么给定?
+		bd_send[6] = len & 0xff;
+		//用户地址怎么给定?
+		bd_send[6+1]=BD1_struct.UserAddr[0];
 		bd_send[7+1]=BD1_struct.UserAddr[1];
 		bd_send[8+1]=BD1_struct.UserAddr[2]; 	
 
@@ -1163,228 +1361,315 @@ void  BD1_Tx(u8 Type,void *str,u8 stuff_len)
 	//   caculate  fcs
 	fcs=0;
 	for(d_len=0;d_len<len-1;d_len++)
-		{
-	  	fcs^=bd_send[d_len];
-		}
-		bd_send[d_len]=fcs;
-		
+	{
+  		fcs^=bd_send[d_len];
+	}
+	bd_send[d_len]=fcs;
+	//rt_kprintf("d_len %d\n",d_len);
+#if 1		
 		bd_send[d_len+1] =0x0D;
 		bd_send[d_len+2] =0x0A;
+
 		//rt_kprintf("校验和的值%d---%d\r\n",bd_send[d_len],d_len);
+	if(flag_mq==1)
+	{
+		//如果有紧急报警则置位标志
+		if(WARN_StatusGet())
+		{
+			StatusReg_WARN_Enable();
+			result = rt_mq_urgent(&mq_bd1,&bd_send[0],len+2);
+			rt_kprintf("bd1 jin ji bao jing fa song\n");
+		}
+		else
+		{
+			StatusReg_WARN_Clear();
+			if(BD_TX.status ==bd1_send_Artificial)
+			{
+				result = rt_mq_urgent(&mq_bd1,&bd_send[0],len+2);
+				rt_kprintf("shou dong fa song  \n");
+			}
+			else
+			{
+				result =rt_mq_send(&mq_bd1,&bd_send[0],len+2);
+			}
+			
+		}
+		rt_kprintf("fa song jie guo %d\n",result);
+		BD_TX.length =len+2;//长度赋值给全局的长度,用于接收裁剪;
+		if(result==-RT_EFULL)
+		{
+			rt_kprintf("信息发送已经满了,等待信息\n");
+			return RT_ERROR;
+		}
+	}
+	else
+	{
+		OutPrint_HEX("write_BD1:", bd_send, len+2);
+		u3_send_len("test",4);
+		u3_send_len(bd_send,len+2);
+	}
+	return RT_EOK;
+#endif
+		//u3_send_len(bd_send,len);
+		//OutPrint_HEX("write_BD1:", bd_send, len);
 
-
-	// send
-	
-	u3_send_len(bd_send,len+2);
-	OutPrint_HEX("write_BD1:", bd_send, len+2);
 	//memset(str,0,sizeof(str));
 	 //一旦发送就值位;
 
 }
-
-
+/******************************************************************************
+ * BD1_RxProcess() 
+ * DESCRIPTION: 处理从北斗1终端发回来的数据  
+ * Input: 
+ * Output: 
+ * Returns: 
+ * 
+ * modification history
+ * --------------------
+ *  08 5 2014, wxg written
+ * --------------------
+ ******************************************************************************/
 void BD1_RxProcess(void)  
 {
-   //u8  iRX;
-  // u8  Rx_userAdd[8];
-   u8  Broadcast[260];
-   u8 i=0;
-     //  Debug
-     OutPrint_HEX("U3_rx_hex",U3_content,U3_content_len);
-     //rt_kprintf("\r\n %s \r\n",U3_content);
-	   memset(Broadcast,0,sizeof(Broadcast));
-     //  Check UserID  filter
-     //if((U3_content[6]==BD1_struct.UserAddr[0])&&(U3_content[7]==BD1_struct.UserAddr[1])&&(U3_content[8]==BD1_struct.UserAddr[2]))
-     //------------------------------------------------------------
-     if(strncmp(U3_content,"$GLJC",5)==0)    // 功率检测
-     	{
-     		
-         BD1_struct.Output_freq = U3_content[10];
-		 /*
-		 sprintf(Broadcast,"%d",BD1_struct.Output_freq);
-		 TTS_play("功率检测的值为");
-		 TTS_play(Broadcast);
-		 memset(Broadcast,0,sizeof(Broadcast));
-		 */
-     	}
-     
-     if(strncmp(U3_content,"$DWXX",5)==0)  // 定位信息
-     	{
-     	   // check info_type    U3_content[9]
-     	   // position    U3_content[13]
-     	   BD1_struct.hour= U3_content[13+1];
-		   BD1_struct.minute= U3_content[14+1];
-		   BD1_struct.second= U3_content[15+1];
-		   BD1_struct.little_second= U3_content[16+1];
 
-		   BD1_struct.longi_Du= U3_content[17+1];
-		   BD1_struct.longi_Fen= U3_content[18+1];
-		   BD1_struct.longi_Miao= U3_content[19+1];
-		   BD1_struct.longi_Little_Miao= U3_content[20+1];
-		   
+u8  Broadcast[260];
+u8 i=0,j=0,cycles =0;
+u8 boundary[10] ={0};
+u8 tran[300]={0};
+u16 data_len =0;
+//+++++++++++++++++++++++++++++++++++++++++++ring_buffer+++++++++++++
+unsigned char CH;
+rt_err_t result;
+//  Debug
 
-		   BD1_struct.lati_Du= U3_content[21+1];
-		   BD1_struct.lati_Fen= U3_content[22+1];
-		   BD1_struct.lati_Miao= U3_content[23+1];
-		   BD1_struct.lati_Little_Miao= U3_content[24+1]; 
-			rt_sprintf(Broadcast,"定位信息:经度%d度%d分%d点%d秒,纬度:%d度%d分%d点%d秒",BD1_struct.longi_Du,BD1_struct.longi_Fen,BD1_struct.longi_Miao,\
-			BD1_struct.longi_Little_Miao,BD1_struct.lati_Du,BD1_struct.lati_Fen,BD1_struct.lati_Miao,BD1_struct.lati_Little_Miao);
-		   TTS_play(Broadcast);
-		   BD1_struct.Ground_height= (U3_content[25+1]<<8)+U3_content[26+1];
-           
-		   BD1_struct.User_height= (U3_content[27+1]<<8)+U3_content[28+1]; 
-
-		   // debug
-		   rt_kprintf("\r\n 北斗1 位置信息: %d:%d:%d.%d   Longi  %d度%d分%d.%d秒  lati  %d度%d分%d.%d秒  大地高程 %d  用户高程 %d \r\n",\
-		   BD1_struct.hour,BD1_struct.minute,BD1_struct.second,BD1_struct.little_second,\
-		   BD1_struct.longi_Du,BD1_struct.longi_Fen,BD1_struct.longi_Miao,BD1_struct.longi_Little_Miao,\
-		   BD1_struct.lati_Du,BD1_struct.lati_Fen,BD1_struct.lati_Miao,BD1_struct.lati_Little_Miao,\
-		   BD1_struct.Ground_height&0x3f,BD1_struct.User_height&0x3f );
-		   
-
-
-     	}
-	 if(strncmp(U3_content,"$TXXX",5)==0)  // 通信信息 
-		 {
-
-		     BD1_struct.Text_len=(U3_content[16]<<8)+U3_content[17];
-			 BD1_struct.Text_len =BD1_struct.Text_len/8;
-			 memset(BD1_struct.Text_info,0,sizeof(BD1_struct.Text_info));
-			 if(U3_content[10]==0x60)//如果是混发
-             {
-             	memcpy(BD1_struct.Text_info,U3_content+19,BD1_struct.Text_len);
-			 	TTS_play(BD1_struct.Text_info);
-             }
-			 else
-			 {
-			 	memcpy(BD1_struct.Text_info,U3_content+18,BD1_struct.Text_len);
-				TTS_play(BD1_struct.Text_info);
-			 }
-			 Rx_data_save(U3_content);
-			 //+++++++++++++++将数字0-9转化为字符串播报++++++++
-			 /*
-			 for(i=0;i<BD1_struct.Text_len;i++)
-			 {
-			 	if((BD1_struct.Text_info[i]<=9)&&(BD1_struct.Text_info[i]>=0))
-		 		{
-					BD1_struct.Text_info[i]=BD1_struct.Text_info[i]+'0';
-		 		}
-			 }
-			 */
-			 //TTS_play(BD1_struct.Text_info);
-	         rt_kprintf("\r\n   北斗1 接收文本信息:%s\r\n", BD1_struct.Text_info); 
-		 }
-	  
-	  if(strncmp(U3_content,"$ICXX",5)==0) // IC  信息 
-		 {
-		 	memcpy(BD1_struct.UserAddr,U3_content+7,3);
-			BD1_struct.Frame_num = U3_content[10];
-		    memset(BD1_struct.Broadcast_ID,0,sizeof(BD1_struct.Broadcast_ID));
-			memcpy(BD1_struct.Broadcast_ID,U3_content+11,3);
-			BD1_struct.User_status = U3_content[14];
-			BD1_struct.Service_freq = (U3_content[15]<<8)+U3_content[16];
-			if(BD1_struct.Service_freq>=BD1_struct.in_freq)
-			{
-				BD1_struct.in_freq= BD1_struct.Service_freq;
-				
-			}
-
-			BD1_struct.Communicate_grade = 	U3_content[17];
-			BD1_struct.Encode_state = U3_content[18];
-			BD1_struct.Sub_user = (U3_content[19]<<8)+U3_content[20];
-			BD_IC.result=result_success;
-			BD_IC.status=result_success;
-			TTS_play("北斗用户卡正常");
-			
-		 }
-	  if(strncmp(U3_content,"$ZJXX",5)==0)	// 自检信息
-		{
-			BD1_struct.IC_state =  U3_content[10];
-			BD1_struct.Hrdware_sate = U3_content[11];
-			BD1_struct.Battery_stae = U3_content[12];
-			BD1_struct.Inbound_status = U3_content[13];
-			#ifdef  Beam_power_numb//定义功率状况
-			memset(BD1_struct.Beam_power,0,sizeof(BD1_struct.Beam_power));
-			memcpy(BD1_struct.Beam_power,U3_content+14,6);
-			#endif
-			if((0==BD1_struct.IC_state)&&(0==BD1_struct.Hrdware_sate))
-			{
-				BD_ZJ.result = result_success;
-				TTS_play("北斗终端正常");
-				BD_ZJ.status=result_success;
-			}
-			BD1_control.BD_Signal =0;
-			for(i=0;i<6;i++)
-			{
-				if((BD1_struct.Beam_power[i])!=0)
-				{
-					 BD1_control.BD_Signal=BD1_control.BD_Signal+1;
-				}
-				//rt_kprintf("波束功率--%d",BD1_struct.Beam_power[i]);
-			}
-			BD_ZJ.flag_send =result_success;
-			//rt_kprintf("BD1_control.BD_Signal--%d\r\n",BD1_control.BD_Signal);
-		}
-	   
-	   if(strncmp(U3_content,"$SJXX",5)==0) // 时间信息
-		  {
-			BD1_struct.year = (U3_content[10]<<8)+U3_content[11];
-			BD1_struct.Month = U3_content[12];
-			BD1_struct.Day = U3_content[13];
-			BD1_struct.hour = U3_content[14];
-			BD1_struct.minute = U3_content[15];
-			BD1_struct.second = U3_content[16];
-			
-		  }
-	   if(strncmp(U3_content,"$BBXX",5)==0) // 版本信息 
-		   {
-	   #ifdef  Version_Info
-	        memset(Version,0,Version_Info);
-	        memcpy(Version,(char*)U3_content[10],Version_Info);
-	   #endif	
-			 
-		   }
+#if 1
+while((rt_ringbuffer_getchar(&bd1_pool,&CH))==1)
+{
+	rt_kprintf("%02X ",CH);
+	 tran[U3_rxCounter++]=CH;
+	  if(tran[0]!='$')
+	 { 	
+	     U3_rxCounter=0;
+     }
+	  if(U3_rxCounter==7)
+	 {
+	   //5和6字节是长度信息
+	   U3_content_len=(tran[5]<<8)+tran[6];	// byte 5   是长度字节内容	
+	   rt_kprintf("U3_content_len %d\n",U3_content_len);
+	 }
+	 
+    //当收到的数据长度等于len默认为收完了
+	 if(U3_content_len==U3_rxCounter)
+	 	{
+	 	   BD1_struct.Rx_enable=RT_EOK;//收到了信息才处理			  
+          U3_rxCounter =0;
+		   break;
+	 	} 
+}
+#endif
+if( BD1_struct.Rx_enable==RT_EOK)
+{
+OutPrint_HEX("U3_rx_hex",tran,U3_content_len);	
+memset(Broadcast,0,sizeof(Broadcast));
+if(strncmp(tran,"$GLJC",5)==0)	  // 功率检测
+{
 		
-		if(strncmp(U3_content,"$FKXX",5)==0) // 反馈信息
-		   {
-             BD1_struct.Feedback_flag = U3_content[10];
-			 if(BD1_struct.Feedback_flag==0x00)
-			 {
-			 	BD_FK.result =result_success; 
-				memset(Big_lcd.TXT_content,0,sizeof(Big_lcd.TXT_content));//发送完成清零
-				Lcd_write(Big_lcd.status,LCD_Text_clear,0);//将文字清零
-				delay_ms(10);
-				Lcd_write(Big_lcd.status,LCD_PAGE,1);
-				//发送成功了
-				dwlcd =0;//小屏发送
-				BD_TX.status = bd1_send_auto;
-				
-			 }
-			 else
-			 {
-			 	BD_FK.result = result_failed;
-				rt_kprintf("Reasons for failure--%d\r\n",BD1_struct.Feedback_flag);
-				 memset(BD1_struct.Add_Info,0,4);
-		 		memcpy(BD1_struct.Add_Info,U3_content+11,4);
-				if(strncmp(BD1_struct.Add_Info,"DWSQ",4)==0)
-				{
-					
-					//BD_FK.flag_send =DWCF;
-					TTS_play("定位失败");
-				}
-				if(strncmp(BD1_struct.Add_Info,"TXSQ",4)==0)
-				{
-					//BD_FK.flag_send =TXCF;
-					TTS_play("通信失败");
-				}
-			
-		   	  }
+ BD1_struct.Output_freq = tran[10];
+ /*
+ sprintf(Broadcast,"%d",BD1_struct.Output_freq);
+ TTS_play("功率检测的值为");
+ TTS_play(Broadcast);
+ memset(Broadcast,0,sizeof(Broadcast));
+ */
+}
 
-			}
-     //-------------------------------------------------------------
-     memset(U3_content,0,sizeof(U3_content));
-	 //rt_kprintf("test----1\r\n");
-	 BD1_struct.Rx_enable=RT_EBUSY;
+if(strncmp(tran,"$DWXX",5)==0)	// 定位信息
+	{
+	   // check info_type	 tran[9]
+	   // position	  tran[13]
+	   BD1_struct.hour= tran[13+1];
+   BD1_struct.minute= tran[14+1];
+   BD1_struct.second= tran[15+1];
+   BD1_struct.little_second= tran[16+1];
+
+   BD1_struct.longi_Du= tran[17+1];
+   BD1_struct.longi_Fen= tran[18+1];
+   BD1_struct.longi_Miao= tran[19+1];
+   BD1_struct.longi_Little_Miao= tran[20+1];
+   
+
+   BD1_struct.lati_Du= tran[21+1];
+   BD1_struct.lati_Fen= tran[22+1];
+   BD1_struct.lati_Miao= tran[23+1];
+   BD1_struct.lati_Little_Miao= tran[24+1]; 
+	rt_sprintf(Broadcast,"定位信息:经度%d度%d分%d点%d秒,纬度:%d度%d分%d点%d秒",BD1_struct.longi_Du,BD1_struct.longi_Fen,BD1_struct.longi_Miao,\
+	BD1_struct.longi_Little_Miao,BD1_struct.lati_Du,BD1_struct.lati_Fen,BD1_struct.lati_Miao,BD1_struct.lati_Little_Miao);
+   TTS_play(Broadcast);
+   BD1_struct.Ground_height= (tran[25+1]<<8)+tran[26+1];
+   
+   BD1_struct.User_height= (tran[27+1]<<8)+tran[28+1]; 
+
+   // debug
+   rt_kprintf("\r\n 北斗1 位置信息: %d:%d:%d.%d   Longi  %d度%d分%d.%d秒  lati	%d度%d分%d.%d秒  大地高程 %d  用户高程 %d \r\n",\
+   BD1_struct.hour,BD1_struct.minute,BD1_struct.second,BD1_struct.little_second,\
+   BD1_struct.longi_Du,BD1_struct.longi_Fen,BD1_struct.longi_Miao,BD1_struct.longi_Little_Miao,\
+   BD1_struct.lati_Du,BD1_struct.lati_Fen,BD1_struct.lati_Miao,BD1_struct.lati_Little_Miao,\
+   BD1_struct.Ground_height&0x3f,BD1_struct.User_height&0x3f );
+
+	}
+if((strncmp(tran,"$TXXX",5)==0))	// 通信信息 
+ {
+
+	 BD1_struct.Text_len=(tran[16]<<8)+tran[17];
+	 BD1_struct.Text_len =BD1_struct.Text_len/8;
+	 memset(BD1_struct.Text_info,0,sizeof(BD1_struct.Text_info));
+	 OutPrint_HEX("mgic_number",tran+18,5);
+	 if(tran[10]==0x60)//如果是混发
+	 {
+
+		memcpy(BD1_struct.Text_info,tran+19,BD1_struct.Text_len);
+		
+		//if(strcmp(tran+19,"#TCB")!=0)
+		if(BD_TX.info_source==1)
+		{
+			TTS_play(BD1_struct.Text_info);
+			Rx_data_save(tran,BD1_struct.Text_len);
+			BD_TX.info_source =0;
+		}
+		
+	 }
+	 else
+	 {
+		memcpy(BD1_struct.Text_info,tran+18,BD1_struct.Text_len);
+		//if(strcmp(tran+19,"#TCB")!=0)
+		if(BD_TX.info_source==1)
+		{
+			TTS_play(BD1_struct.Text_info);
+			Rx_data_save(tran,BD1_struct.Text_len);
+			BD_TX.info_source =0;
+		}
+		
+	 }
+	 
+	 
+	 rt_kprintf("	北斗1 接收文本信息:%s\n", BD1_struct.Text_info); 
+ }
+
+if(strncmp(tran,"$ICXX",5)==0) // IC  信息 
+ {
+	memcpy(BD1_struct.UserAddr,tran+7,3);
+	BD1_struct.Frame_num = tran[10];
+	memset(BD1_struct.Broadcast_ID,0,sizeof(BD1_struct.Broadcast_ID));
+	memcpy(BD1_struct.Broadcast_ID,tran+11,3);
+	BD1_struct.User_status = tran[14];
+	BD1_struct.Service_freq = (tran[15]<<8)+tran[16];
+	if(BD1_struct.Service_freq>=BD1_struct.in_freq)
+	{
+		BD1_struct.in_freq= BD1_struct.Service_freq;
+	}
+
+	BD1_struct.Communicate_grade =	tran[17];
+	BD1_struct.Encode_state = tran[18];
+	BD1_struct.Sub_user = (tran[19]<<8)+tran[20];
+	BD_IC.result=result_success;
+	BD_IC.status=result_success;
+	//tts_play_flag =2;//表示我要读出声音了
+	TTS_play("北斗用户卡正常");
+	
+ }
+if(strncmp(tran,"$ZJXX",5)==0)	// 自检信息
+{
+	BD1_struct.IC_state =  tran[10];
+	BD1_struct.Hrdware_sate = tran[11];
+	BD1_struct.Battery_stae = tran[12];
+	BD1_struct.Inbound_status = tran[13];
+#ifdef  Beam_power_numb//定义功率状况
+	memset(BD1_struct.Beam_power,0,sizeof(BD1_struct.Beam_power));
+	memcpy(BD1_struct.Beam_power,tran+14,6);
+#endif
+	if((0==BD1_struct.IC_state)&&(0==BD1_struct.Hrdware_sate))
+	{
+		BD_ZJ.result = result_success;
+		//tts_play_flag=1;
+		TTS_play("北斗终端正常");
+		BD_ZJ.status=result_success;
+	}
+	BD1_control.BD_Signal =0;
+	for(i=0;i<6;i++)
+	{
+		if((BD1_struct.Beam_power[i])!=0)
+		{
+			 BD1_control.BD_Signal=BD1_control.BD_Signal+1;
+		}
+		//rt_kprintf("波束功率--%d",BD1_struct.Beam_power[i]);
+	}
+	BD_ZJ.flag_send =result_success;
+	//rt_kprintf("BD1_control.BD_Signal--%d\r\n",BD1_control.BD_Signal);
+}
+
+if(strncmp(tran,"$SJXX",5)==0) // 时间信息
+  {
+	BD1_struct.year = (tran[10]<<8)+tran[11];
+	BD1_struct.Month = tran[12];
+	BD1_struct.Day = tran[13];
+	BD1_struct.hour = tran[14];
+	BD1_struct.minute = tran[15];
+	BD1_struct.second = tran[16];
+	
+  }
+if(strncmp(tran,"$BBXX",5)==0) // 版本信息 
+   {
+#ifdef  Version_Info
+	memset(Version,0,Version_Info);
+	memcpy(Version,(char*)tran[10],Version_Info);
+#endif	
+	 
+   }
+
+if(strncmp(tran,"$FKXX",5)==0) //反馈信息
+   {
+	 BD1_struct.Feedback_flag = tran[10];
+	 if(BD1_struct.Feedback_flag==0x00)
+	 {
+		BD_FK.result =result_success; 
+		#if 0
+		memset(Big_lcd.TXT_content,0,sizeof(Big_lcd.TXT_content));//发送完成清零
+		Lcd_write(Big_lcd.status,LCD_Text_clear,0);//将文字清零
+		delay_ms(10);
+		Lcd_write(Big_lcd.status,LCD_PAGE,1);
+		//发送成功了
+		#endif
+		//TTS_play("通信成功");
+		dwlcd =0;//小屏发送
+		BD_TX.status = bd1_send_auto;
+		
+	 }
+	 else
+	 {
+		BD_FK.result = result_failed;
+		rt_kprintf("Reasons for failure--%d\r\n",BD1_struct.Feedback_flag);
+		 memset(BD1_struct.Add_Info,0,4);
+		memcpy(BD1_struct.Add_Info,tran+11,4);
+		if(strncmp(BD1_struct.Add_Info,"DWSQ",4)==0)
+		{
+			
+			//BD_FK.flag_send =DWCF;
+			TTS_play("定位失败");
+		}
+		if(strncmp(BD1_struct.Add_Info,"TXSQ",4)==0)
+		{
+			//BD_FK.flag_send =TXCF;
+			TTS_play("通信失败");
+		}
+	
+	  }
+
+	}
+memset(tran,0,sizeof(tran));
+}
+
+
+BD1_struct.Rx_enable=RT_EBUSY;//这里的busy是指处于发送时间间隔等待中
 }
 
 u16  Protocol_808_Decode_Good(u8 *Instr ,u8* Outstr,u16  in_len)  // 解析指定buffer :  UDP_HEX_Rx  
@@ -1428,32 +1713,30 @@ void CAN2_RxHandler(unsigned char rx_data)
      */
      
      U3_Rx[U3_rxCounter++]=rx_data;
+  
      if(U3_Rx[0]!='$')
 	 { 	
 	     U3_rxCounter=0;
 	     return;
      }
-	
-	 if(U3_rxCounter==7)
-	 {
-	   
-	   U3_content_len=(U3_Rx[U3_rxCounter-2]<<8)+U3_Rx[U3_rxCounter-1];	// byte 5   是长度字节内容				
-	 }
-	 
-    
-	 if(U3_content_len==U3_rxCounter)
-	 	{
-	 	   
-	 	   memcpy(U3_content,U3_Rx,U3_content_len);				  
-           BD1_struct.Rx_enable=RT_EOK;
-		   //------------------
-           U3_rxCounter=0;
-	 	}
+	else
+	{
+		//收到了信息才处理
+		BD1_struct.Rx_enable=RT_EOK;
+	}
    //-----------------------------------------------------------------------
  
 	 
-    
 }
+
+void CAN2_RxHandler_01(unsigned char rx_data)
+{
+#if 1	
+	rt_ringbuffer_putchar(&bd1_pool,rx_data);
+#endif
+
+}
+
 
 void CAN2_putc(char c)
 {
@@ -1515,10 +1798,11 @@ void u3_power(u8 i)
 void u3_send_len(u8 *instr,u16 infolen)
 {
     u16  len=infolen;
-		 
+	u8 *p=instr;	
+	//rt_kprintf("\nlen=%d p=%p",len,p);
 	 while (len)
 	{
-		CAN2_putc (*instr++);   
+		CAN2_putc (*p++);   
 		len--; 
 	}
     
@@ -1592,6 +1876,8 @@ static rt_err_t   Device_CAN2_init( rt_device_t dev )
 	USART_ITConfig(USART3, USART_IT_RXNE, ENABLE);         
 
 
+
+
 	return RT_EOK;
 }
 
@@ -1642,6 +1928,16 @@ void  Device_CAN2_regist(void )
 	Device_CAN2.read	=  Device_CAN2_read;
 	Device_CAN2.write	=  Device_CAN2_write;
 	Device_CAN2.control =Device_CAN2_control;
+	
+
+//++++++++++++++++++++++++++++++++++++++++BD1++++++
+#if 1
+	 BD_Timer=rt_timer_create("BD_Timer",BD_Timer_out,RT_NULL,100,RT_TIMER_FLAG_PERIODIC);
+	 if(BD_Timer!=RT_NULL)
+	 rt_timer_start(BD_Timer); 
+#endif
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	rt_ringbuffer_init( &bd1_pool, bd_data,BD_DATA_SIZE );
 
 	rt_device_register( &Device_CAN2, "CAN2", RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_STANDALONE );
 	rt_device_init( &Device_CAN2 );
@@ -1704,10 +2000,9 @@ void Freq_in(u8 *input)
 	BD1_control.data_freq = value;
 	if(BD1_control.data_freq>=BD1_struct.Service_freq)
 	{
-		reg_str[3] = BD1_control.data_freq>>8;
-		reg_str[4] =BD1_control.data_freq&0xff;
 		BD1_struct.in_freq = BD1_control.data_freq;
 	}
+	/*
 	else
 	{
 		reg_str[3] = BD1_struct.Service_freq>>8;
@@ -1715,16 +2010,36 @@ void Freq_in(u8 *input)
 		BD1_struct.in_freq = BD1_struct.Service_freq;
 		
 	}
-	
+	*/
 	reg_str[0] = BD1_control.data_user_addr[0];	
 	reg_str[1] = BD1_control.data_user_addr[1];	
 	reg_str[2] = BD1_control.data_user_addr[2];
+	reg_str[3] = BD1_control.data_freq>>8;
+	reg_str[4] =BD1_control.data_freq&0xff;
 	DF_WriteFlashSector(DF_BD_first_target ,0,reg_str,5);
 	#endif
 }
 FINSH_FUNCTION_EXPORT(Freq_in, Freq); 
 
-
+void test(u8 input)
+{
+	u16 i=0,m=0;
+	u8 data[200] ={0};
+	if(input == 2)
+	{
+		for(i=0;i<16*512;i=i+256)
+		{
+			DF_ReadFlash(DF_BD_data_rx,i,data,50);
+			for( m=0;m<50;m++)
+			 {
+			 	rt_kprintf("%02X",data[m]);
+			 }
+			 rt_kprintf("\n");
+			memset(data,0,50);
+		}
+	}
+}
+FINSH_FUNCTION_EXPORT(test, da yin); 
 
 
 

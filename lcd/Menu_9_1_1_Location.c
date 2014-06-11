@@ -74,16 +74,17 @@ static void keypress(unsigned int key)
 			   	lcd_text12(0,2,"按确认键选择测高方",18,LCD_MODE_SET);
 				lcd_text12(0,18,"式为无测高",10,LCD_MODE_SET);
 			   lcd_update_all();
-			   BD1_control.data_altimeter =0x04;
+			   BD1_control.data_altimeter =1;
+			   BD1_control.data_mode =0;
 			   Menu_Logout=2;
 			   }
 		   else if(Menu_Logout==2)//
 			   {
 			   Menu_Logout=0;
-
+				BD1_Tx(BD1_TYPE_DWSQ,info_data,11);
 			   lcd_fill(0);
 			   lcd_text12(24,10,"定位申请发出",12,LCD_MODE_SET);
-			   BD1_Tx(BD1_TYPE_DWSQ,info_data,11);
+			   
 			   lcd_update_all();
 			   
 			   }

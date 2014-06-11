@@ -38,13 +38,14 @@ static u8 lcd_contrl = 0;
  u8  GSM_HEX[1024];  
 u16  GSM_HEX_len=0; 
 
-
+extern u8 you_can_deial;
 //----- gsm_thread  rx   app_thread  data  related ----- 	
 //static  MSG_Q_TYPE  gsm_rx_app_infoStruct;  //  gsm  接收从 app 来的数据结构
 
 ALIGN(RT_ALIGN_SIZE)
  uint8_t					GSM_rawinfo[GSM_RAWINFO_SIZE];
  struct rt_messagequeue	mq_GSM; 
+
 
 
 
@@ -333,12 +334,14 @@ static void gsm_thread_entry(void* parameter)
 		   HMI_app_init();	
       #endif           
        gps_init();
-  	   Lcd_init();
+	  
+  	  //_WXG Lcd_init();
 	  
 	   
 	 //--------------------------------------  
 	while (1)
 	{
+	#if 0	
 	 if((dwlcd_contr<=5))
 	   	{
 			if(Login_Menu_Flag!=1)
@@ -352,28 +355,30 @@ static void gsm_thread_entry(void* parameter)
 				Lcd_write(Big_lcd.status,LCD_PAGE,0x01);
 				dwlcd_contr++;
 			}
-			;
+			
 	   	}
-            // 1.  after power  on    get imsi code  	 	
-              IMSIcode_Get(); 
+	 #endif
+           
+				IMSIcode_Get(); 
+			
+               
             //  2. after get imsi   Comm   AT  initial   start 
               GSM_Module_TotalInitial();  
             // 3. Receivce & Process   Communication  Module   data ----
 	       GSM_Buffer_Read_Process(); 
-		   rt_thread_delay(20);      	
-	       DataLink_Process();	
+		    rt_thread_delay(20);      	
+	       DataLink_Process();
+	      
+		   #if 0
 		   //++++++++++++++++++++++++DWLCD+++++++++++++++++++++
 	       //_485_RxHandler_01();
+	       
 	       if(Big_lcd.RX_enable==LCD_BUSY)
 	       	{
 		   	Lcd_Data_Process();
 			Big_lcd.RX_enable=LCD_IDLE;
 	       	}
-		   /*
-		   Lcd_write(Big_lcd.status,LCD_SETSPD,0);
-			Lcd_write(Big_lcd.status,LCD_GPSNUM,Satelite_num);
-		   Lcd_write(Big_lcd.status,LCD_GSMNUM,ModuleSQ);
-		   */
+		  
 		   if(ModuleStatus&Status_GPS )
 		   	{
 		   	if(Big_lcd.RX_enable==LCD_IDLE)
@@ -388,10 +393,8 @@ static void gsm_thread_entry(void* parameter)
 		   		}
 		   	}
 		   //++++++++++++++++++++++++DWLCD+++++++++++++++++++++
-		   if(BD1_struct.Rx_enable==RT_EOK)
-		   	{
-		   		BD1_RxProcess();
-		   	}
+		   #endif
+		   
              //------------------------------------------------
 		    if (Send_DataFlag== 1) 
                {
@@ -481,7 +484,7 @@ void _gsm_startup(void)
 		//-------------   sem  init  ---------------------------------
 		//rt_sem_init(&gsmRx_sem, "gsm", 0, 0);        
 	  rt_mq_init( &mq_GSM, "mq_GSM", &GSM_rawinfo[0], 1400 - sizeof( void* ), GSM_RAWINFO_SIZE, RT_IPC_FLAG_FIFO );
-
+	  
        //---------  timer_gsm ----------
 	         // 1. create  timer     100ms=Dur
 	      timer_gsm=rt_timer_create("tim_gsm",timeout_gsm,RT_NULL,100,RT_TIMER_FLAG_PERIODIC);//| RT_TIMER_FLAG_SOFT_TIMER);  

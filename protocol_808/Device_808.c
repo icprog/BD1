@@ -654,7 +654,7 @@ void TIM3_IRQHandler(void)
             if(TIM3_Timer_Counter==20)  //  100ms  ----100        
             {
                  //--------  service ------------------                  
-				 KeyCheckFun();
+				// KeyCheckFun();
 				 //---------- IC card  insert --------------------------
 				 CheckICInsert();  
 				 //------- Buzzer -----------------------------------

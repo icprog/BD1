@@ -55,6 +55,7 @@ extern  uint8_t					GSM_rawinfo[GSM_RAWINFO_SIZE];
 extern struct rt_messagequeue	mq_GSM; 
 
 
+
 extern u8 	ModuleStatus;   //网络状态 
 extern u8       Mocule_Data_Come; // 模块收到数据 
 

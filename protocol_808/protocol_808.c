@@ -11074,14 +11074,22 @@ void Tired_Check( void )
 /*
     打印输出 HEX 信息，Descrip : 描述信息 ，instr :打印信息， inlen: 打印长度
 */
-void OutPrint_HEX(u8 * Descrip, u8 *instr, u16 inlen )
-{
-    u32  i=0;
-     rt_kprintf("\r\n %s",Descrip);
-     for( i=0;i<inlen;i++)
-          rt_kprintf("%2X ",instr[i]); 
-     rt_kprintf("\r\n");
-}
+	void OutPrint_HEX(u8 * Descrip, u8 *instr, u16 inlen )
+	{
+		u32  i=0;
+		 rt_kprintf("\n%s: %d>>%d\n",Descrip,inlen,rt_tick_get());
+		 for( i=0;i<inlen;i++)
+		 {
+			rt_kprintf("%02X ",instr[i]);
+			if((i+1)%16==0)
+			{
+				rt_kprintf("\n");
+			}
+		 }
+			   
+		 rt_kprintf("\n");
+	}
+
 
 /*
 void gpsspd(u8 *strin)   //  GPS 用假速度

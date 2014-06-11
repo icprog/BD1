@@ -405,10 +405,23 @@ void  VOC_REC_filedel(void)
 //FINSH_FUNCTION_EXPORT(VOC_REC_Start, voice recrod);
 #endif
 //=========================================================================
-//    TTS  realated
+
+/******************************************************************************
+ * TTS_Get_Data() 
+ * DESCRIPTION: //    TTS  realated  
+ * Input: 
+ * Output: 
+ * Returns: 
+ * 
+ * modification history
+ * --------------------
+ *  05 6 2014, wxg written
+ * --------------------
+ ******************************************************************************/
 u8    TTS_Get_Data(u8 *Instr,u16 LEN)     //  return   0   : OK     return   1 : busy
 {
      // 1. check status 
+     
    if(TTS_Var.Playing)
    	{
            memset(TTS_Var.HEX_BUF,0,sizeof((const char*)TTS_Var.HEX_BUF));
@@ -427,8 +440,22 @@ u8    TTS_Get_Data(u8 *Instr,u16 LEN)     //  return   0   : OK     return   1 :
      TTS_Var.TimeCounter=0;
      //  4.  ready to play
 	TTS_Var.NeedtoPlay=1;	 
+	rt_kprintf("wxg test %d\n",TTS_Var.NeedtoPlay);
     return  TTS_OK;
 }
+
+/******************************************************************************
+ * TTS_Data_Play() 
+ * DESCRIPTION: 播放编好的码流  
+ * Input: 
+ * Output: 
+ * Returns: 
+ * 
+ * modification history
+ * --------------------
+ *  05 6 2014, wxg written
+ * --------------------
+ ******************************************************************************/
 u8    TTS_Data_Play(void) 
 {
        u16   i=0;
@@ -458,17 +485,17 @@ u8    TTS_Data_Play(void)
            //  head
            memset(AT_TTS,0,sizeof(AT_TTS));  
 	    strcat(AT_TTS,"AT%TTS=2,3,6,\"");   
-	    TTS_Len=strlen(AT_TTS)	;	      
+	    TTS_Len=strlen(AT_TTS);	      
 	   //  info		 
 	     memcpy(AT_TTS+TTS_Len,TTS_Var.ASCII_BUF,TTS_Var.ASCII_Len);	
 	     TTS_Len+=TTS_Var.ASCII_Len; 
 	   //  tail	 
 	      memcpy((char*)AT_TTS+TTS_Len,"\"\r\n",3);    // tail 	 
             TTS_Len+=3;     	 
-	        
+	    #if 1    
 	    for(i=0;i<TTS_Len;i++)
 			 rt_kprintf("%c",AT_TTS[i]);   
-
+		#endif
 	   rt_hw_gsm_output_Data(AT_TTS,TTS_Len);	
 
 	  WatchDog_Feed();
@@ -517,7 +544,7 @@ void TTS_play(u8 * instr)
 {
       
       TTS_Get_Data(instr,strlen((const char*)instr));
-      rt_kprintf("\r\n    手动语音播报: %s\r\n",instr);
+      rt_kprintf("手动语音播报: %s\r\n",instr);
 }
 FINSH_FUNCTION_EXPORT(TTS_play, TTS play);
 
@@ -749,17 +776,19 @@ void Dial_Stage(T_Dial_Stage  Stage)
 }
 void  GSM_RxHandler(u8 data)
 {
-   rt_interrupt_enter( );   
+
+   //rt_kprintf("%c",data);
    		if( ( data==0x0a)&&(former_byte==0x0d ) ) /*遇到0d 0a 表明结束*/
 		{
 			GSM_INT_BUFF.gsm_content[GSM_INT_BUFF.gsm_wr++] = data;
-			if( GSM_INT_BUFF.gsm_wr < 1400 )
+			if( GSM_INT_BUFF.gsm_wr)
 			{			     
 			  	rt_mq_send( &mq_GSM, (void*)&GSM_INT_BUFF, GSM_INT_BUFF.gsm_wr+ 2 );				
 			} 			
 			
 			GSM_INT_BUFF.gsm_wr = 0; 
-		}else
+		}
+		else
 		{
 			GSM_INT_BUFF.gsm_content[GSM_INT_BUFF.gsm_wr++] = data;    
 			if( GSM_INT_BUFF.gsm_wr == GSM_TYPEBUF_SIZE )
@@ -770,7 +799,6 @@ void  GSM_RxHandler(u8 data)
 		}
 		former_byte = data;  
 		
-  rt_interrupt_leave( );	 
 	  
 }
 
@@ -782,11 +810,14 @@ void  GSM_Buffer_Read_Process(void)
 	rt_err_t	res;
 
 	{
-		res = rt_mq_recv( &mq_GSM,(void*)&GSM_RX_BUFF, 1400, 3 ); //等待100ms,实际上就是变长的延时,最长100ms
-		if( res == RT_EOK )                                                     //收到一包数据
+		//等待100ms,实际上就是变长的延时,最长100ms
+		res = rt_mq_recv( &mq_GSM,(void*)&GSM_RX_BUFF, 1400, 3);
+		//rt_kprintf("gsm_recv %d\n",res);
+		if( res == RT_EOK )                                                  
 		{
 				GSM_Process(GSM_RX_BUFF.gsm_content, GSM_RX_BUFF.gsm_wr); 
 		}
+		
 	}
 
 }
@@ -938,8 +969,11 @@ void  Data_Send(u8* DataStr, u16  Datalen,u8  Link_Num)
   //   if(DispContent==2)
      if(Photo_sdState.photo_sending==0)   // 拍照时不输出相关信息 
 	 {
+	 	#if 1
 	    for(i=0;i<packet_len;i++)
-			 rt_kprintf("%c",GSM_AsciiTx[i]);     
+		rt_kprintf("%c",GSM_AsciiTx[i]);   
+		#endif
+		//OutPrint_HEX("send_data",GSM_AsciiTx,packet_len);
 	 }
         rt_hw_gsm_output_Data(GSM_AsciiTx,packet_len);	
         WatchDog_Feed();
@@ -1298,10 +1332,10 @@ void DataLink_Process(void)
              	{
                    case Dial_DialInit0: 
 				   	 rt_hw_gsm_output(DialInit1);
-			               //-----------------------------------------
-                                      DataDial.start_dial_stateFLAG=1;   
-				         //-----------------------------------------
-				         DataDial.Dial_step_RetryTimer=Dial_Dial_Retry_Time;
+					//-----------------------------------------
+					DataDial.start_dial_stateFLAG=1;   
+					//-----------------------------------------
+					DataDial.Dial_step_RetryTimer=Dial_Dial_Retry_Time;
 					  DataDial.Dial_step_Retry++;
 					  //  Debug
  					  rt_kprintf(DialInit1);   
@@ -1456,9 +1490,12 @@ static void GSM_Process(u8 *instr, u16 len)
    
    if(BD_ISP.ISP_running==0)      
    {
+   	#if 1
        rt_kprintf("\r\n");      
         for(i=0;i<len;i++)  
-		 rt_kprintf("%c",GSM_rx[i]);      	
+		 rt_kprintf("%c",GSM_rx[i]); 
+	#endif
+	//OutPrint_HEX("receive_data",GSM_rx,len);
    }
 
    //------------------------------------------------------------------------------------------------------------------- 
@@ -1508,9 +1545,7 @@ static void GSM_Process(u8 *instr, u16 len)
 			} 
 		  info_len=len-i-5;  	  
 		
-		//sscanf(GSM_rx+10, "%d", (u32*)&info_len); 	
-		//info_len=(info_len<<1);
-	   // rt_kprintf("\r\n rxlen=%d,caculen=%d \r\n",info_len,len-i-5);    
+		   
 		WatchDog_Feed();
 	    Get_GSM_HexData(GSM_rx+i+1,info_len,0);         
 	         goto RXOVER; 	 
@@ -1526,8 +1561,9 @@ static void GSM_Process(u8 *instr, u16 len)
 	
 	if(strncmp((char*)GSM_rx, "%TTS: 0",7)==0)
 	{
-                 TTS_Play_End();
-		    rt_kprintf("\r\n   TTS  播放完毕\r\n");   
+            TTS_Play_End();
+		    rt_kprintf("\r\n   TTS  播放完毕\r\n"); 
+			tts_play_flag =0;
 			Speak_OFF;
 	}
 #ifdef  SMS_ENABLE

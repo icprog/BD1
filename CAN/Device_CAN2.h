@@ -28,12 +28,12 @@
 #define BD1_TYPE_BBDQ             7 
 
 
-#define result_success   	2
-#define result_failed	 	3
-#define result_pending   	5
-#define result_Artificial 	6
-#define bd1_send_auto    	7
-#define bd1_send_Artificial    9
+#define result_success   	2//成功
+#define result_failed	 	3//失败
+#define result_pending   	5//未知
+#define result_Artificial 	6//人工
+#define bd1_send_auto    	7//自动
+#define bd1_send_Artificial    9//人工
 
 #define TXCF     2
 #define DWCF     3
@@ -127,10 +127,12 @@ vs32 	press_value;		//气压数据单位为0.1HP
 typedef struct _BD_SELF_CHECK
 {
 u8  Time_consum;
-u8  Frequency;
+u8  llcd_time_wait;//等待时间
 u8  result;
-u8  status;
+u8  status;//目前的状态是人工还是自发
 u8  flag_send;//7、不能发送 0可以发送
+u16	length;
+u8  info_source;//存储数据来源 用于定义数据是否存储
 }BD_SELF_CHECK;
 
 extern  ELEVA_PRESS Aerial_air;
@@ -152,11 +154,17 @@ extern void Freq_in(u8 *input);
 extern void Tx_in(u8* instr,u16 len);
 extern void Target_id(u8* input);
 extern void user_id(u8* input);
-extern void  BD1_Tx(u8 Type,void *str,u8 stuff_len);
+extern u8  BD1_Tx(u8 Type,void *str,u8 stuff_len);
 extern void BD1_init(void);
 extern u16 Info_to_fill(void ); 
+extern void u3_send_len(u8 *instr,u16 infolen);
+extern u8 data_recv(void);
+
+extern u8 tts_play_flag ;
+
+extern u8 bo_bao(u8 input);
 //+++++++++++++++++++++++++++++++++++
-extern u8 Rx_data_save(u8 *str);
+extern u8 Rx_data_save(u8 *str,u8 length);
 extern u8  show_screen(u8 *str ,u8 input,u16 length);
 extern u8 Read_save_data(u8*str,u8 input,u8 mode);
 extern void  First_show(u8* str2 ,u8 Screen,u8 mode);

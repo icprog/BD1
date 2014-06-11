@@ -24,6 +24,7 @@ typedef struct    _HMI_COM
 extern struct rt_mailbox mb_hmi;
 extern char   mb_str1[];
 extern char   mb_str2[];
+extern struct rt_messagequeue mq_bd1;
 
 
 extern void  HMI_app_init(void);    

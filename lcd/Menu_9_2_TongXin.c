@@ -53,6 +53,7 @@ static void dis_data(int input)
 
 static void keypress(unsigned int key)
 {
+u8 result; 
 switch(KeyValue)
 	{
 	case KeyValueMenu:
@@ -66,21 +67,26 @@ switch(KeyValue)
 		if(select !=0)
 		{
 			BD_TX.status = bd1_send_Artificial;
-			if(BD_TX.flag_send==RT_EOK)
+			//if(BD_TX.flag_send==RT_EOK)
 			{
-				BD1_Tx(BD1_TYPE_TXSQ,trans[number_txt],strlen(trans[number_txt]));
-				BD_TX.status=bd1_send_auto;
-				BD_FRE.Frequency=0;
-				BD_TX.flag_send=RT_EBUSY;
-				lcd_fill(0);
-				lcd_text12(10,10,"信息已经发送",12,LCD_MODE_SET);
-				lcd_update_all();
-			}
-			else
-			{
-				lcd_fill(0);
-				lcd_text12(10,10,"等待入站.....",13,LCD_MODE_SET);
-				lcd_update_all();
+				result =BD1_Tx(BD1_TYPE_TXSQ,trans[number_txt],strlen(trans[number_txt]));
+				if(result==RT_EOK)
+				{
+					BD_TX.info_source =1;//信息存入flash中；
+					BD_FRE.llcd_time_wait=0;
+					//这里屏蔽掉只有消息队列接收发送了才能置为BUSY
+					//BD_TX.flag_send=RT_EBUSY;
+					BD_TX.status=bd1_send_auto;
+					lcd_fill(0);
+					lcd_text12(10,10,"信息已经发送",12,LCD_MODE_SET);
+					lcd_update_all();
+				}
+				else
+				{
+					lcd_fill(0);
+					lcd_text12(10,10,"请稍后再发...",13,LCD_MODE_SET);
+					lcd_update_all();
+				}
 			}
 			select =0; 
 			

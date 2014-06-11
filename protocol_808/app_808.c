@@ -21,7 +21,7 @@
 
 /* 定时器的控制块 */
  static rt_timer_t timer_app; 
-extern rt_timer_t BD_Timer;
+
 
 //------- change  on  2013 -7-24  --------
 rt_thread_t app_tid = RT_NULL; // app 线程 pid
@@ -68,7 +68,7 @@ u8   OneSec_CounterApp=0;
 u32  app_thread_runCounter=0;  
 u32  gps_thread_runCounter=0;
 
-
+extern u8	U3_Tx[260];
 
  //  1. MsgQueue Rx
 
@@ -231,6 +231,12 @@ void  Emergence_Warn_Process(void)
 	 fTimer3s_warncount++;
 	 if(fTimer3s_warncount>=4)			 
 	{
+		//只有检测成功了才能通过BD1发送信息
+		if(BD_IC.result==result_success)
+		{
+			BD1_Tx(BD1_TYPE_TXSQ,U3_Tx,Info_to_fill());
+		}
+		
 		 // fTimer3s_warncount=0;
 		 if ( ( warn_flag == 0 ) && ( f_Exigent_warning == 0 )&&(fTimer3s_warncount==4) )
 		 {
@@ -552,7 +558,8 @@ static void App808_thread_entry(void* parameter)
 	   // 4.    808   Send data   		
         if(DataLink_Status()&&(CallState==CallState_Idle)&&(print_workingFlag==0))   
 	   {   
-	        Do_SendGPSReport_GPRS();    
+	        Do_SendGPSReport_GPRS();
+			
 	   } 
        // 5. ---------------  顺序存储 GPS  -------------------		    
 		if(GPS_getfirst)	 //------必须搜索到经纬度
@@ -603,13 +610,7 @@ void Protocol_app_init(void)
 	   if(timer_app!=RT_NULL)
 	           rt_timer_start(timer_app);
 
-	   //++++++++++++++++++++++++++++++++++++++++BD1++++++
-	   #if 1
-	   	BD_Timer=rt_timer_create("BD_Timer",BD_Timer_out,RT_NULL,100,RT_TIMER_FLAG_PERIODIC);
-		if(BD_Timer!=RT_NULL)
-		rt_timer_start(BD_Timer); 
-		#endif
-	   //++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	
 
       result=rt_thread_init(&app808_thread, 
 		"app808", 
